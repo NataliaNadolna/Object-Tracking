@@ -24,94 +24,91 @@ class Detector:
 
     def open_video(self, videoPath):
         cap = cv2.VideoCapture(videoPath)
-        if (cap.isOpened() == False): 
+        if (not cap.isOpened()): 
             print("Error opening video")
             return
         else:
-            (sucess, img) = cap.read()
+            sucess, img = cap.read()
             return sucess, img, cap
         
     def print_objects(self, img):
-        outputs = self.predictor(img)
+        objects = self.predictor(img)
         print("Objects:")
         
-        classes = outputs["instances"].pred_classes
+        classes = objects["instances"].pred_classes
         print(classes)
 
-        boxes = outputs["instances"].pred_boxes
+        boxes = objects["instances"].pred_boxes
         print(boxes)
 
-        return outputs
+        return objects
     
-    def is_object_moved(self, distance, obj_1, obj_2):
-        first = obj_1.get_centers()[0]
-        second = obj_2.get_centers()[0]
-        second_min = [value-distance for value in second]
-        second_max = [value+distance for value in second]
+    def is_object_moved(self, distance, previous_obj_box, present_obj_box):
+        previous_obj_center = previous_obj_box.get_centers()[0]
+        present_obj_center = present_obj_box.get_centers()[0]
+        obj_center_min = [value-distance for value in present_obj_center]
+        obj_center_max = [value+distance for value in present_obj_center]
 
-        for i, value in enumerate(first):
-            if second_min[i] < first[i] and first[i] < second_max[i]:
+        for i, value in enumerate(previous_obj_center):
+            if obj_center_min[i] < previous_obj_center[i] < obj_center_max[i]:
                 return True
             return False
         
-    def compare_objects(self, outputs_1, outputs_2):
-        # list of moved objects
-        outputs_list = [] 
+    def compare_objects(self, previous_objects, present_objects):
+        list_of_moved_objects = [] 
 
-        classes_1 = outputs_1["instances"].pred_classes
-        boxes_1 = outputs_1["instances"].pred_boxes
-        classes_2 = outputs_2["instances"].pred_classes
-        boxes_2 = outputs_2["instances"].pred_boxes
+        previous_classes = previous_objects["instances"].pred_classes
+        previous_boxes = previous_objects["instances"].pred_boxes
+        present_classes = present_objects["instances"].pred_classes
+        present_boxes = present_objects["instances"].pred_boxes
 
-        for i1, item1 in enumerate(classes_1):
+        for i1, item1 in enumerate(previous_classes):
             print("--- Comparing ---")
-            for i2, item2 in enumerate(classes_2):
+            for i2, item2 in enumerate(present_classes):
                 if item2 == item1:
-                    obj_1 = boxes_1[i1]
-                    obj_2 = boxes_2[i2]
-                    print(f"{item1} -> {obj_1} - {obj_1.get_centers()}")
-                    print(f"{item2} -> {obj_2} - {obj_2.get_centers()}")
+                    previous_obj_box = previous_boxes[i1]
+                    present_obj_box = present_boxes[i2]
+                    print(f"{item1} -> {previous_obj_box} - {previous_obj_box.get_centers()}")
+                    print(f"{item2} -> {present_obj_box} - {present_obj_box.get_centers()}")
 
                     # check if the object didn't move (distance less than 3)
-                    condition = self.is_object_moved(3, obj_1, obj_2)
-                    if condition:
+                    if self.is_object_moved(3, previous_obj_box, present_obj_box):
                         print("Object isn't moved.")
 
-                    else: # check if the object moved (distance between 3 and 20)
-                        condition = self.is_object_moved(20, obj_1, obj_2)
-                        if condition:
+                    # check if the object moved (distance between 3 and 20)
+                    else:
+                        if self.is_object_moved(20, previous_obj_box, present_obj_box):
                             print("Object is moved.")
-                            outputs_list.append(outputs_2["instances"][i2])
-        return outputs_list
+                            list_of_moved_objects.append(present_objects["instances"][i2])
 
-    def prediction(self, sucess, img, cap, outputs_1):
+                        else: print("Different objects")
+
+        return list_of_moved_objects
+
+    def prediction(self, sucess, img, cap, previous_objects):
         while sucess:
-            # print recognised objects
-            outputs_2 = self.print_objects(img)
-
-            # compare objects from the previous image with objects from the present image
-            # list with objects which were moved
-            outputs_list = self.compare_objects(outputs_1, outputs_2)
+            present_objects = self.print_objects(img)
+            list_of_moved_objects = self.compare_objects(previous_objects, present_objects)
 
             # if any object moved -> show the result
-            if len(outputs_list) > 0:
+            if len(list_of_moved_objects) > 0:
                 h, w, c = img.shape
                 new_out = Instances(image_size=[h,w])
-                new_instances = new_out.cat(outputs_list)
+                moved_objects = new_out.cat(list_of_moved_objects)
 
                 viz = Visualizer(img[:,:,::-1],
                                 metadata = MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]))
-                out = viz.draw_instance_predictions(new_instances.to("cpu"))
-                cv2.imshow("Result", out.get_image()[:,:,::-1])
+                output = viz.draw_instance_predictions(moved_objects.to("cpu"))
+                cv2.imshow("Result", output.get_image()[:,:,::-1])
 
             else:
                 cv2.imshow("Result", img)
 
             # the present image becomes the previous image
-            outputs_1 = outputs_2
+            previous_objects = present_objects
 
             # read the next image
-            (sucess, img) = cap.read() 
+            sucess, img = cap.read() 
 
             # press q to exit
             if cv2.waitKey(1) & 0xFF == ord('q'):
